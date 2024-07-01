@@ -17,11 +17,12 @@ fn main(@builtin(global_invocation_id) global_ix: vec3<u32>) {
 
     var position = vec2<i32>(global_ix.xy);
 
-    var color : vec4<f32> = vec4<f32>(0.0, 0.0, 0.0, sin(params.iTime));
+    var color : vec4<f32> = vec4<f32>(0.0, 0.0, sin(params.iTime) * 0.3, 1.);
 
 
     let fragCoord: vec2<f32> = vec2<f32>(global_ix.xy) / vec2<f32>(f32(params.width), f32(params.height))
         - vec2<f32>(0.5, 0.5);
+
 
         
     var sum = params.iTime * 0.2 + fragCoord.x;
