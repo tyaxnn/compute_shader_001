@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use wgpu::util::DeviceExt;
 use wgpu::{BufferUsages, Extent3d, SamplerBindingType};
 
@@ -9,7 +11,9 @@ use winit::{
     dpi::PhysicalSize,
 };
 
-const BUFFER_SIZE: u64 = 12;
+const BUFFER_SIZE: u64 = 16;
+
+const FRAME_NUM : u32 = 20;
 
 struct Model<'a>{
 
@@ -34,6 +38,7 @@ struct Model<'a>{
     render_bindgroup: wgpu::BindGroup,
     //manage time
     start_time : std::time::Instant,
+    now_frame_num : u32,
     
 }
 
@@ -67,8 +72,14 @@ impl<'a> Model<'a> {
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_features: wgpu::Features::TEXTURE_BINDING_ARRAY,
+                required_limits: {
+                    let mut default_lim = wgpu::Limits::default();
+                    
+                    default_lim.max_sampled_textures_per_shader_stage = 1024;
+
+                    default_lim
+                },
             },
             // Some(&std::path::Path::new("trace")), // Trace path
             None,
@@ -112,57 +123,78 @@ impl<'a> Model<'a> {
             mapped_at_creation: false,
         });
 
+        let mut texture_view_vec = Vec::new();
+
         let buffer_resource = buffer.as_entire_binding();
 
-        //prepare for input picture
-        let diffuse_bytes = include_bytes!("regtan.png");
-        let diffuse_image = image::load_from_memory(diffuse_bytes).unwrap();
-        let diffuse_rgba = diffuse_image.to_rgba8();
-    
-        use image::GenericImageView;
-        let dimensions = diffuse_image.dimensions();
-    
-        let texture_size = wgpu::Extent3d {
-            width: dimensions.0,
-            height: dimensions.1,
-            depth_or_array_layers: 1,
-        };
-    
-        //create input texture for wgpu
-        let input_texture = device.create_texture(
-            &wgpu::TextureDescriptor {
-                size: texture_size,
-                mip_level_count: 1, // We'll talk about this a little later
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                label: Some("input_texture"),
-                view_formats: &vec![],
-            }
-        );
+        for i in 0..FRAME_NUM{
+            let file_name = format!("./src/seq_img/regtan_0925_000{}{}.png",{
+                if i < 10 {"0"}
+                else {""}
+            },i);
+
+            println!("{}",file_name);
+
+            //prepare for input picture
+            //let diffuse_bytes = include_bytes!("regtan.png");
+            let diffuse_image = image::open(file_name).unwrap();
+            let diffuse_rgba = diffuse_image.to_rgba8();
         
-        //read picture to texture
-        queue.write_texture(
-            // Tells wgpu where to copy the pixel data
-            wgpu::ImageCopyTexture {
-                texture: &input_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            // The actual pixel data
-            &diffuse_rgba,
-            // The layout of the texture
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * dimensions.0),
-                rows_per_image: Some(dimensions.1),
-            },
-            texture_size,
-        );
-    
-        let input_texture_view = input_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            use image::GenericImageView;
+            let dimensions = diffuse_image.dimensions();
+        
+            let texture_size = wgpu::Extent3d {
+                width: dimensions.0,
+                height: dimensions.1,
+                depth_or_array_layers: 1,
+            };
+        
+            //create input texture for wgpu
+            let input_texture = device.create_texture(
+                &wgpu::TextureDescriptor {
+                    size: texture_size,
+                    mip_level_count: 1, // We'll talk about this a little later
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    label: Some("input_texture"),
+                    view_formats: &vec![],
+                }
+            );
+            
+            //read picture to texture
+            queue.write_texture(
+                // Tells wgpu where to copy the pixel data
+                wgpu::ImageCopyTexture {
+                    texture: &input_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                // The actual pixel data
+                &diffuse_rgba,
+                // The layout of the texture
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * dimensions.0),
+                    rows_per_image: Some(dimensions.1),
+                },
+                texture_size,
+            );
+        
+            let input_texture_view = input_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            texture_view_vec.push(input_texture_view);
+        }
+
+        let mut texture_view_vec_2 = Vec::new();
+
+        for i in 0..texture_view_vec.len(){
+            texture_view_vec_2.push(&texture_view_vec[i])
+        }
+
+        
 
         //prepare for output texture
 
@@ -221,7 +253,7 @@ impl<'a> Model<'a> {
                             view_dimension: wgpu::TextureViewDimension::D2,
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     },
-                    count: None,
+                    count: NonZeroU32::new(FRAME_NUM),
                 },
             ],
         });
@@ -237,6 +269,7 @@ impl<'a> Model<'a> {
             layout: Some(&compute_pipeline_layout),
             module: &compute_shader_module,
             entry_point: "main",
+            compilation_options: Default::default(),
         });
 
 
@@ -255,7 +288,11 @@ impl<'a> Model<'a> {
                 
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&input_texture_view),
+                    resource: wgpu::BindingResource::TextureViewArray({
+                        
+                        
+                        &texture_view_vec_2
+                    }),
                 }, 
     
             ],
@@ -307,11 +344,13 @@ impl<'a> Model<'a> {
                 module: &render_shader,
                 entry_point: "vs_main",
                 buffers: &[],
+                compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &render_shader,
                 entry_point: "fs_main",
                 targets: &[Some(surface_format.into())],
+                compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
@@ -346,6 +385,8 @@ impl<'a> Model<'a> {
 
         let start_time = std::time::Instant::now();
 
+        let now_frame_num = 0;
+
         /*------------------------------------
                 Return Model
         ------------------------------------*/
@@ -362,6 +403,7 @@ impl<'a> Model<'a> {
             render_pipeline,
             render_bindgroup,
             start_time,
+            now_frame_num,
         }
 	}
 
@@ -391,7 +433,12 @@ impl<'a> Model<'a> {
             .create_view(&wgpu::TextureViewDescriptor::default());
 
         let i_time: f32 = 0.5 + self.start_time.elapsed().as_micros() as f32 * 1e-6;
-        let buffer_data = [self.size.width, self.size.height, i_time.to_bits()];
+
+        let buffer_data = [self.size.width, self.size.height, i_time.to_bits(),FRAME_NUM];
+
+        
+        self.now_frame_num += 1;
+
         let buffer_host = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::bytes_of(&buffer_data),
